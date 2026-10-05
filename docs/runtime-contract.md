@@ -1,0 +1,128 @@
+# beng-drive runtime and interface contract
+
+Status: selected configuration for implementation, not deployed. Prepared 2026-09-23 (Europe/London). This contract records H-05, H-07, H-18–H-20 and S-05 decisions and prepares V-01, V-02 and V-10. [README](../README.md) contains standalone setup commands. `.agent` is local working memory and must never enter commits or deployment packages.
+
+## Observed host and selected deployment
+
+Read-only inspection on 2026-09-23 found `beng-mini-pc` (x86_64), login `beng` (UID/GID 1000:1000), Docker server 29.6.1 and Compose 5.0.1. No beng-drive app/service, `/home/beng/beng-drive`, `/home/beng/.local/share/beng-drive`, or listening 4310/4311/443 was observed. Recheck at deployment. Existing containers include homepage, jellyfin, beng-tasker, ntfy, laptop-control, audiobookshelf, lazylibrarian, plex, tandoor, radarr, sonarr, sabnzbd, qbittorrent, bazarr, prowlarr, n8n, seerr, filebrowser, portracker and flaresolverr. Existing ports include 3000, 5678, 7008, 8000, 8081/8082, 8093, 8787 and media-service ports; preserve them. The existing local `.env` is an empty, untracked file; do not package it.
+
+| Choice | Selected value and rule |
+| --- | --- |
+| Deployment | Compose project `beng-drive`, service `app`, one app instance; reuse host cloudflared |
+| App/state | `/home/beng/beng-drive`; host state `/home/beng/.local/share/beng-drive` owned 1000:1000, mode 0700 |
+| Database | Local host bind to `/var/lib/beng-drive/app.sqlite` in container; never place SQLite on NFS |
+| Runtime identity | UID:GID `1000:1000`; no root or supplemental GID 10 |
+| NAS bind | Host `/mnt/nas/workspace/beng-drive` to container `/data`, Compose long bind syntax with `create_host_path: false` |
+| Mount preflight | Require `/mnt/nas/workspace` to be NFS source `192.168.68.67:/volume3/workspace`; verify identity on host and in container before admitting storage work |
+| Guest | Container `0.0.0.0:4310`, published only at host `127.0.0.1:4310` |
+| Admin | Separate router at container `0.0.0.0:4311`, published only at host `127.0.0.1:4311` |
+| Origins | Public `https://drive.thebeng.dev`; admin `https://beng-mini-pc.lamb-mine.ts.net` |
+| Admin publication | Tailscale Serve HTTPS 443 to `http://127.0.0.1:4311`; Funnel disabled |
+
+The existing NAS parent is NFSv3, rw, hard, TCP, `timeo=600,retrans=2`. At T01, `beng-drive` was UID:GID 1000:10, mode 0777. T03 changed only that empty directory root to 0700 after inspecting contents and ACLs; see the status below. An isolated Docker NFS fault proved the bounded worker behavior, and a 128 MiB tus fixture passed against the real NAS. Production mount outage handling and restart ordering remain untested (V-06/V-10). App subdirectories use 0700, files 0600. No sibling share permission changes.
+
+## Configuration and provisioning
+
+`.env.example` contains operational defaults. Copy it only into the deployment secret configuration; supply an exact `ADMIN_OWNER_LOGIN` from the owner. Empty owner login denies all admin requests and fails production configuration validation. Never infer the identity from host account, machine ownership or a Tailscale peer list. Cloudflare connector credentials stay with the existing host service and do not enter the app environment. Do not store invitation keys, cookies, or credentials in repository files, logs or evidence.
+
+| Setting / bound | Value |
+| --- | --- |
+| FILE_MAX_BYTES / DEFAULT_ALLOWANCE_BYTES | 10000000000 / 10000000000 |
+| FREE_SPACE_FLOOR_BYTES / COLLECTION_MAX_FILES | 10000000000 / 1000 |
+| COLLECTION_DEFAULT_TTL_SECONDS | 604800 (seven days) |
+| UPLOAD_CHUNK_MAX_BYTES / SESSION_ACTIVE_TRANSFERS | 10485760 / 2 |
+| CLEANUP_INTERVAL_SECONDS / PARTIAL_IDLE_SECONDS | 3600 / 172800 |
+| Expired/revoked partial cleanup | Within 86400 seconds while NAS is available; retain and report debt during outages |
+| Bounded storage I/O | At most 10 active and 10 queued operations; never replace a worker still blocked in kernel I/O; excess gets 503 and Retry-After 5 |
+| Readiness | 2-second bounded storage probe, cached five seconds; storage timeout fails readiness/admission, not liveness |
+| Request timing | Headers 10 seconds, JSON body 15 seconds, chunk request 120 seconds; timeout does not imply NFS I/O stopped |
+
+Publish only the guest Compose port on host loopback, with no LAN or IPv6 wildcard host binding. Production admin listens only on `/var/lib/beng-drive/admin.sock` inside the local state bind, mode 0600 beneath a UID-owned 0700 directory; there is no published admin TCP port. Tailscale Serve's supported `unix:` target can reach the host path `/home/beng/.local/share/beng-drive/admin.sock`. The privileged host operator and tailscaled root process remain trusted; another process with Beng's UID or Docker privilege can reach the socket, so this boundary is not protection against a compromised operator account. Other local users and direct TCP clients cannot inject Serve identity. Do not select a router by Host header. Guest static and API routes have no admin handlers. Admin requires owner-only effective Tailnet policy granting the exact login to this host TCP 443 **and** an app comparison of authenticated Serve `Tailscale-User-Login` with `ADMIN_OWNER_LOGIN` on the private socket. Absent or mismatched identity fails closed. Admin mutations additionally require exact `ADMIN_ORIGIN` and a session-bound CSRF token. T04 must inspect effective grants for broad access before changing policy.
+
+On startup, an exclusive short-lived lock in that private state directory serializes cooperating app starts. An existing mode-0600 socket owned by the runtime UID gets a bounded connect probe: a live listener is preserved, and only ECONNREFUSED followed by the same device/inode/type/owner/mode permits unlinking a stale socket before binding. Unexpected files, symlinks, foreign ownership/mode, changed identity, probe timeout/error or an existing startup lock fail closed. A crash after normal startup leaves no startup lock, so the packaged process can recover its stale socket from the persistent bind. A crash during the short startup lock itself retains the lock and requires an exact operator inspection; the app will not guess that an uncertain lock is safe to remove.
+
+## Pinned protocol and runtime
+
+Use Node **24.21.0 LTS** image `node:24.21.0-bookworm-slim`, bundled `node:sqlite`/SQLite **3.53.4**, `@tus/server` **2.4.5**, `@tus/file-store` **2.1.1**, `tus-js-client` **4.3.1**, and tus protocol **1.0.0**. Pin exact npm versions and lockfile. T02 records the resolved image digest and verifies the engine inside that image. `node:sqlite` is a documented release-candidate API; restrict use to `DatabaseSync`, prepared statements, transactions and backup, and pin Node. Do not hold DB transactions over NAS/network waits. No native SQLite dependency is selected.
+
+Official evidence checked 2026-09-23: [Node release](https://nodejs.org/en/blog/release/v24.21.0), [SQLite API](https://nodejs.org/download/release/latest-v24.x/docs/api/sqlite.html), [bundled sqlite3.h](https://raw.githubusercontent.com/nodejs/node/v24.21.0/deps/sqlite/sqlite3.h), npm registry [server](https://registry.npmjs.org/@tus/server/2.4.5), [store](https://registry.npmjs.org/@tus/file-store/2.1.1), [client](https://registry.npmjs.org/tus-js-client/4.3.1), [tus server](https://github.com/tus/tus-node-server), [protocol](https://tus.io/protocols/resumable-upload), [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve). Server/store engines require Node >=20.19.0; client requires >=18. Compatibility does not prove NFS durability: T03 must inspect file-store flush/offset semantics and prove the I/O boundary before T09.
+
+## Input, authentication and errors
+
+After strict UTF-8 decoding reject invalid Unicode, NUL and prohibited controls; trim title and display name and require nonempty. UTF-8 byte maxima: title 120, welcome 2000, display name 80, original filename 255, MIME metadata 128. Welcome permits tab/newline; other fields reject controls. Preserve escaped original filename as metadata; generate unique server storage ID and a sanitized basename <=160 bytes, with uniqueness independent of normalization/truncation. Reject unknown JSON fields, wrong types and coercion. Expiry is future UTC ISO time. Allowance is a nonnegative safe integer and cannot drop below completed plus reserved. Collection tokens and keys each have >=128 independent CSPRNG bits; session tokens >=256. Store only key/session hashes. Do not log tokens, cookie, keys, bodies, original filenames or display names.
+
+JSON bodies are streamed with a 16384-byte actual limit, including chunked requests; headers <=16384 bytes. Decoded tus metadata aggregate <=2048 bytes and encoded `Upload-Metadata` <=4096. Reject duplicate keys; permit only `filename`, `filetype`, `lastModified`, validating each. Creation requires canonical nonnegative decimal safe-integer `Upload-Length` <=10000000000. Deferred length, concatenation and creation-with-upload are unsupported. POST/HEAD/DELETE/OPTIONS tus bodies are empty. PATCH requires `application/offset+octet-stream`; stream <=10485760 actual bytes even with absent/false Content-Length, stop immediately on overflow, never append past declared size or buffer an entire chunk.
+
+Unlock limiting uses rolling 15-minute windows: five failures per normalized source IP/collection, and 100 attempts per collection including successes. Deny until the oldest contributing attempt leaves; rejected requests do not extend the window. Return 429 with rounded-up Retry-After seconds 1..900. Persist in local SQLite and prune expired rows in each accepted unlock transaction; cap live distinct IP/collection entries at 10000 and reject new ones with 429 when full. Separate global 1000 attempts/minute protects unknown tokens without per-token allocation. Trust only a verified proxy path for source IP, never arbitrary X-Forwarded-For. Missing key/name or malformed body on a syntactically routable request counts; wrong key 401, unknown collection 404, expired/revoked 410. Only successful unlock discloses collection details.
+
+One `__Host-beng_session` Secure/HttpOnly/SameSite=Lax/Path=/ cookie holds an opaque token mapping to server-side grants for multiple collections. Each grant has credential version and its own expiry; cookie max-age is no later than the latest active grant. Rotation/revocation invalidates immediately. A session-bound CSRF token is returned on unlock/session lookup. Authenticated mutations require exact public Origin and X-CSRF-Token; unlock requires exact public Origin and JSON content type. Missing Origin is rejected, including protocol clients. Reads and tus HEAD still authorize ownership. No permissive CORS.
+
+Errors use `{error:{code,message,retryAfterSeconds?},requestId}` with random requestId, no exception text or storage paths. Codes: 400 INVALID_INPUT; 401 UNAUTHORIZED/INVALID_KEY; 403 FORBIDDEN/ORIGIN_REJECTED; 404 NOT_FOUND (also foreign IDs); 405 METHOD_NOT_ALLOWED with Allow; 409 QUOTA_EXCEEDED/FILE_COUNT_LIMIT/OFFSET_CONFLICT/INVALID_STATE; 410 COLLECTION_UNAVAILABLE; 413 BODY_TOO_LARGE/FILE_TOO_LARGE; 415 UNSUPPORTED_MEDIA_TYPE; 429 RATE_LIMITED; 503 STORAGE_UNAVAILABLE/BUSY; 500 INTERNAL_ERROR. Tus protocol headers/status apply: HEAD no body, unsupported Tus-Resumable gets 412 with Tus-Version, safe PATCH offset conflicts get 409 with current Upload-Offset. All API/tus/session responses use Cache-Control: no-store.
+
+## Route contract
+
+`C` = current unexpired/unrevoked collection grant; `U` = C plus same-session upload ownership; `A` = authenticated owner identity through trusted Serve path. Authenticated mutations also enforce Origin/CSRF above. Unknown routes return 404; unlisted methods return 405. SPA fallback must exclude `/api`, `/uploads`, `/admin` and health paths. Pagination is max 100/page with opaque cursor. No download endpoint.
+
+| Listener | Method and route | Auth | Success / result |
+| --- | --- | --- | --- |
+| Guest | GET `/`, `/c/:token`, `/assets/*` | none | 200 static shell; no collection details before unlock |
+| Guest | GET `/health/live` | none | 200 `{status:"ok"}` without NAS call |
+| Guest | POST `/api/c/:token/unlock` | key/name, Origin, limit | 200 cookie, csrfToken, summary |
+| Guest | GET `/api/c/:token/session` | C | 200 own grant/summary/csrfToken |
+| Guest | GET `/api/c/:token/uploads` | C | 200 own-session receipts/status, paginated |
+| Guest | GET `/api/c/:token/uploads/:id` | U | 200 lifecycle/status, no download |
+| Guest | OPTIONS `/uploads/:token` | none | 204 protocol capabilities only |
+| Guest | POST `/uploads/:token` | C | 201 Location `/uploads/:token/:id`, reserved length, empty body; zero-byte finalizes |
+| Guest | HEAD `/uploads/:token/:id` | U | 200 or 204 committed Upload-Offset/Upload-Length |
+| Guest | PATCH `/uploads/:token/:id` | U | 204 committed Upload-Offset; completion requires lifecycle confirmation |
+| Guest | DELETE `/uploads/:token/:id` | U | 204 after deletion/accounting, repeat cancelled 204; unavailable 503 retains reservation; completed 409 |
+| Admin | GET `/`, `/assets/*` | A | 200 admin UI only |
+| Admin | GET `/api/admin/session` | A | 200 csrfToken and configured publicOrigin for invitation links |
+| Admin | GET `/api/admin/collections` | A | 200 summaries, paginated |
+| Admin | POST `/api/admin/collections` | A | 201 summary, invitation URL, one-time key |
+| Admin | GET `/api/admin/collections/:id` | A | 200 summary and paginated labels/status; no hash |
+| Admin | PATCH `/api/admin/collections/:id` | A | 200 validated updates, 409 below commitments |
+| Admin | POST `/api/admin/collections/:id/rotate-key` | A | 200 one-time key/version increment; revoke old grants |
+| Admin | POST `/api/admin/collections/:id/revoke` | A | 200 idempotent revoked state; retain files |
+| Admin | GET `/api/admin/health` | A | 200 bounded storage/cleanup state and debt counts, no-store; see [cleanup contract](cleanup.md) |
+| Admin | GET `/health/live`, `/health/ready` | local trusted caller | 200 live; ready 200 or 503 from bounded cached probe |
+
+No guest admin registration, tus GET, completed-file DELETE or collection hard delete. Pause is client-side. Resume HEAD/PATCH rechecks access. If a credential is invalidated during an accepted chunk, that chunk may finish; subsequent chunks are denied.
+
+## Database, storage and recovery lifecycle
+
+SQLite: `foreign_keys=ON`, `journal_mode=WAL`, `synchronous=FULL`, `busy_timeout=5000`; one migration owner, numbered schema, fail on newer unsupported schema, no destructive downgrade. Persist grants and rate limits. Back up with SQLite backup API rather than copying a live main DB without WAL. Reconcile DB backup and NAS snapshot before reopening admission; roll back only to schema-compatible code.
+
+Tables: collections (unique random token, key hash/version, expiry, revoked, allowance), browser_sessions (token hash and CSRF hash/secret), grants (unique session+collection, version, expiry, display name), uploads (unique server ID, collection/grant, original metadata, declared size, status/timestamps, unique storage locator), bounded auth attempts, and schema version. Enforce foreign keys, integer/nonnegative/status constraints. In `BEGIN IMMEDIATE` admission compute completed+reserved bytes/count from indexed uploads; do not duplicate accounting counters. Every admitted noncancelled file, including zero-byte, counts. Failed-but-not-deleted and finalizing records retain full reservations. Tus committed offset is authoritative; no competing DB offset.
+
+Lifecycle: `creating → uploading → finalizing → completed`; `creating/uploading → deleting → cancelled`. A recoverable I/O error annotates the current state and retains the reservation. Admission reserves full declared bytes and inserts creating transactionally, then creates the NAS partial. The worker records generated ownership, committed offset, and versioned commit time in the durable sidecar; SQLite transfer activity reconciles from it under the upload's held claim after timeout or restart, before idle deletion. Legacy sidecars with unknown activity cannot be idle-deleted on stale SQLite time alone. Release only after absence/deletion is confirmed. Use generated paths `/data/partials/<id>` and `/data/completed/<collection-id>/<upload-id>-<safe-basename>` with tus sidecars under partials; reject symlinks and user paths.
+
+Serialize PATCH, finalize, cancel and cleanup per upload, including reconciliation. Acknowledged offsets require successful payload flush/close. At full length enter finalizing, flush and close the payload, persist versioned identity/hash evidence, then atomically publish the same inode using an exclusive same-filesystem hard link. Sync the destination directory, unlink only the verified partial, sync its directory, validate the final hash, then commit SQLite completed and publish one receipt. A crash may leave both names for one inode; recovery checks that identity before unlinking. A distinct-inode destination stays a preserved conflict even if bytes match. A DB flag or same-size file alone is insufficient. Never delete completed payloads to resolve inconsistency: report and keep admission safe. Authorized repeated HEAD/finalization retry must work after sidecar cleanup; completed offset is immutable. See [completion recovery](completion.md).
+
+Free-space admission: observed free bytes minus *remaining* bytes of active reservations minus new declared size must stay >=10000000000. Do not subtract already persisted bytes twice. Recheck during PATCH, handle external consumption and ENOSPC without false completion. NAS stat/offset calls run in bounded storage workers; stale/unavailable observations reject admission. Hard NFS I/O can outlive HTTP timeout: no unbounded replacement workers, queued payload/chunk buffers or local fallback. T03 must prove this with isolated fixtures; unresolved failure blocks T09. Cancel/cleanup mark deletion, remove only owned partial, then release reservation; failures remain visible and retryable. Completed files are never cleaned automatically.
+
+## External gates and ownership
+
+- **T04, owner Cloudflare account — NOT CONFIGURED.** Confirm DNS/account ownership. Add only the drive hostname to the existing locally managed connector; preserve `ssh.thebeng.dev → ssh://localhost:22` and final 404. Disable private-response caching. Protect any temporary spike with Cloudflare Access until real auth is integrated. Reuse credentials in place; no app tunnel token.
+- **T04, owner Tailnet account — NOT CONFIGURED.** Owner supplies exact login; inspect effective grants, approve narrowly scoped TCP 443 policy and enable Serve/certificate if needed. Funnel remains disabled. Test authorized and unauthorized devices. Current Serve/Funnel both say `No serve config`.
+- **T03, runtime operator — PARTIAL.** Scoped NAS writes, 128 MiB tus resume/hash and isolated hard-NFS fault recovery passed. Production mount ordering and restart persistence remain untested without disturbing the shared mount.
+- **T02, implementer — NOT TESTED.** Resolve image digest, verify bundled SQLite in image, create exact npm pins/lockfile. A mismatch stops dependent runtime work for contract review.
+- **T16, owner devices — NOT TESTED.** Physical iOS/Android and screen-reader acceptance comes later.
+
+Escalate if paths/ports collide, NAS ownership changes, unrelated data would be touched, upstream pins vanish or conflict, requirements need weakening, or the next integration needs owner account action. These are implementation gates, not claims of application acceptance. No production application upload route, Cloudflare/Tailscale policy, or deployment has been tested by this document.
+
+## T03 storage spike status (2026-09-23)
+
+The scoped NAS root was empty with basic ACLs, UID:GID 1000:10, and mode 0777 before T03. It is now mode **0700** with the same ownership/group; no sibling permissions changed. A uniquely named 0700 fixture under it wrote, fsynced and atomically renamed a 0600 1 MiB file, fsynced its directory, verified SHA-256, inspected free space, and removed itself. A second unique fixture streamed 128 MiB through loopback tus HTTP in 8 MiB requests on the real NAS, stopped and restarted the server process at a committed 32 MiB offset, resumed from HEAD and matched source/NAS SHA-256. Its 0600 file and sidecar were removed. No source payload file was staged locally.
+
+The T03 fixture also compared fresh server lifetimes for 16 MiB and 128 MiB uploads with one active transfer, 8 MiB requests and identical 2 ms pacing per 64 KiB body piece. A separate client observer sampled actual server and storage-worker `/proc` RSS every 25 ms during PATCHes; it ignored worker-exit races. Idle server baselines were 65,716,224 and 65,826,816 bytes; simultaneous server-plus-worker peaks were 144,887,808 and 159,498,240 bytes, a 14,610,432-byte increase below the fixture's 64 MiB acceptance threshold. Maximum live workers was one in both cases, with 28 and 210 active samples containing a worker. Client/generator RSS was measured separately and excluded from the service comparison. This supports bounded memory under this fixture load, not a universal production memory cap or an exact 10 GB claim. The distinct 128 MiB restart/resume case still matched hashes.
+
+Installed `@tus/file-store` 2.1.1 source creates its directory recursively, uses a `createWriteStream`/pipeline without payload `fsync`, writes JSON sidecars without `fsync`, and reports offset from payload `stat.size`. Those semantics can acknowledge bytes before durable payload/offset metadata, and can create a local fallback directory if the mount is missing. T03's local adapter instead checks root/mount identity before operations, uses generated IDs and a child-process boundary, caps active/pending operations at 10 each, sends at most 64 KiB per acknowledged IPC chunk, fsyncs payload before atomically replacing/fsyncing the committed-offset sidecar, and keeps timed-out workers occupying slots. Liveness never probes NAS; readiness uses a bounded 2-second probe cached five seconds. The tus harness exists only in focused fixture tests; no production guest upload route is registered.
+
+The hard-NFS interruption proof passed on an isolated Docker network and disposable volume, using NFS-Ganesha 4.3-2 with FSAL VFS and a client mount with `hard,nolock`, fixed NFS/mount ports. The client alone had `SYS_ADMIN` and scoped `apparmor=unconfined`; the server added `DAC_READ_SEARCH`; neither was privileged or used a host namespace or production NAS bind. Normal fsync/read/hash and unmount/remount passed before fault injection. An independent watchdog restored the same paused server after 30 seconds. Ten active workers and ten queued requests remained bounded and retained the same worker PIDs while blocked beyond 12 seconds. One active request timed out after 2 seconds while its worker slot, upload ID lock and PID remained occupied; repeated admission returned 503 without spawning a replacement. Fixture HTTP liveness returned 200, readiness and excess admission returned 503, and no offset response claimed success. After restoration the same worker finished, its committed offset/hash matched, capacity became reusable, and resources were removed. The NAS tus runner separately proves that an attached Docker CLI timeout cannot authorize fixture deletion: it inspects/stops/waits for the exact writer container first, retaining the fixture/image/stage if exit cannot be established. This fixture differs from the production mount in its `nolock` option and shorter retry timing; it proves the bounded application boundary, not a production outage. T03 is reviewer-approved; T04/T09 product integration and any saved receipt remain gated. T14 must establish production mount ordering. Completion/reconciliation after rename remains T10 work. NFS-Ganesha [core configuration](https://github.com/nfs-ganesha/nfs-ganesha/blob/next/src/doc/man/ganesha-core-config.rst) and [export/FSAL configuration](https://github.com/nfs-ganesha/nfs-ganesha/blob/next/src/config_samples/ganesha.conf.example) informed the isolated fixture.
+
+T04 local transport preparation uses a private Unix socket for production admin and publishes only the guest loopback port. The [routing change manifest](routing-manifest.md) records actual read-only host state, proposed route/resource targets and rollback, and open owner gates. No public, private Serve, DNS, Access, or production app route has been activated.
+
+T05's [collection persistence and private API contract](collections-api.md) documents the implemented collection schema, owner session/CSRF boundary, collection routes and transactional commitment query. T06's [guest authentication contract](guest-auth.md) documents the version 3 limiter migration, browser grants, receipt reads and source-IP limitation. These are locally verified, not a deployed owner dashboard or guest upload service.
+
+The [upload API contract](upload-api.md) defines the official `@tus/server` adapter, current-grant ownership and exclusive admission snapshots. T09-R permits up to ten concurrent PATCH streams, at most two per session, with conservative chunk-byte reservations covering in-flight free-space samples through actual worker settlement. Sidecars remain authoritative for committed offsets. Local correctness and packaged runtime checks are not public/NAS throughput acceptance; T04 routing and T15 load evidence remain separate gates.

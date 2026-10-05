@@ -1,0 +1,11 @@
+FROM node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6
+RUN apt-get update -qq && apt-get install -y --no-install-recommends nfs-common=1:2.6.2-4+deb12u1 netbase=6.4 && rm -rf /var/lib/apt/lists/*
+WORKDIR /code
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts
+COPY src/server/storage/ src/server/storage/
+COPY test/fixtures/ test/fixtures/
+COPY scripts/fixtures/hard-nfs-client.mjs scripts/fixtures/hard-nfs-client.mjs
+COPY scripts/fixtures/hard-nfs-probe.mjs scripts/fixtures/hard-nfs-probe.mjs
+COPY scripts/fixtures/hard-nfs-fault.mjs scripts/fixtures/hard-nfs-fault.mjs
+CMD ["sh", "-c", "mount --make-rprivate / && mkdir -p /data && mount -t nfs -o vers=3,proto=tcp,hard,nolock,port=2049,mountport=20048,timeo=10,retrans=2 bd-t03-server:/export /data && exec node scripts/fixtures/hard-nfs-client.mjs"]

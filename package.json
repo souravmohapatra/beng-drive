@@ -1,0 +1,35 @@
+{
+  "name": "beng-drive",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "build": "vite build && tsc --noEmit",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "test:storage": "node --test test/storage.test.mjs test/tus-storage.test.mjs",
+    "test:routing": "node --test test/routing.test.mjs",
+    "test:collections": "node --test test/collections.test.mjs",
+    "test:auth": "node --test test/auth.test.mjs",
+    "test:uploads": "node --test test/uploads.test.mjs",
+    "test:completion": "node --test test/completion.test.mjs",
+    "test:cleanup": "node --test test/cleanup.test.mjs",
+    "test:design": "node --test test/design.test.mjs",
+    "preview:design": "vite --host 127.0.0.1 --port 4177 --strictPort",
+    "smoke:storage": "node scripts/smoke-storage.mjs",
+    "start": "node src/server/main.mjs",
+    "smoke:container": "node scripts/smoke-container.mjs"
+  },
+  "dependencies": {
+    "@tus/file-store": "2.1.1",
+    "@tus/server": "2.4.5",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "tus-js-client": "4.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "typescript": "7.0.2",
+    "vite": "8.3.0"
+  }
+}

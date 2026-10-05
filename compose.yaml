@@ -1,0 +1,38 @@
+name: beng-drive
+services:
+  app:
+    build: .
+    user: "1000:1000"
+    restart: unless-stopped
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      APP_MODE: ${APP_MODE:-production}
+      CONTAINER_BIND: "1"
+      HOST_BIND: 0.0.0.0
+      DB_PATH: /var/lib/beng-drive/app.sqlite
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN}
+      ADMIN_ORIGIN: ${ADMIN_ORIGIN}
+      ADMIN_OWNER_LOGIN: ${ADMIN_OWNER_LOGIN}
+      ADMIN_SOCKET_PATH: /var/lib/beng-drive/admin.sock
+      FILE_MAX_BYTES: ${FILE_MAX_BYTES:-10000000000}
+      DEFAULT_ALLOWANCE_BYTES: ${DEFAULT_ALLOWANCE_BYTES:-10000000000}
+      FREE_SPACE_FLOOR_BYTES: ${FREE_SPACE_FLOOR_BYTES:-10000000000}
+      COLLECTION_MAX_FILES: ${COLLECTION_MAX_FILES:-1000}
+      COLLECTION_DEFAULT_TTL_SECONDS: ${COLLECTION_DEFAULT_TTL_SECONDS:-604800}
+      UPLOAD_CHUNK_MAX_BYTES: ${UPLOAD_CHUNK_MAX_BYTES:-10485760}
+      SESSION_ACTIVE_TRANSFERS: ${SESSION_ACTIVE_TRANSFERS:-2}
+      CLEANUP_INTERVAL_SECONDS: ${CLEANUP_INTERVAL_SECONDS:-3600}
+      PARTIAL_IDLE_SECONDS: ${PARTIAL_IDLE_SECONDS:-172800}
+    ports:
+      - "127.0.0.1:4310:4310"
+    volumes:
+      - type: bind
+        source: ${STATE_BIND_SOURCE:-/home/beng/.local/share/beng-drive}
+        target: /var/lib/beng-drive
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${NAS_BIND_SOURCE:-/mnt/nas/workspace/beng-drive}
+        target: /data
+        bind:
+          create_host_path: false

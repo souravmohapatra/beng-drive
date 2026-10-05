@@ -1,0 +1,4 @@
+FROM node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6
+RUN apt-get update -qq && apt-get install -y --no-install-recommends nfs-ganesha=4.3-2 nfs-ganesha-vfs=4.3-2 netbase=6.4 && rm -rf /var/lib/apt/lists/*
+COPY scripts/fixtures/ganesha.conf /etc/ganesha/ganesha.conf
+CMD ["sh", "-c", "chown 1000:1000 /export && chmod 700 /export && mkdir -p /run/ganesha && rpcbind -w && exec ganesha.nfsd -F -L STDOUT -f /etc/ganesha/ganesha.conf"]

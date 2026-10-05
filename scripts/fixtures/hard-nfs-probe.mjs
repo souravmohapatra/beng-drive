@@ -1,0 +1,26 @@
+import assert from 'node:assert/strict';
+import { randomBytes, createHash } from 'node:crypto';
+import { createReadStream, promises as fs } from 'node:fs';
+import { Readable } from 'node:stream';
+import { StoragePool } from '../../src/server/storage/pool.mjs';
+
+const id = randomBytes(16).toString('hex');
+const collectionId = '11111111-1111-1111-1111-111111111111';
+const grantId = '22222222-2222-2222-2222-222222222222';
+const pool = new StoragePool({ root: '/data', expectedSource: 'bd-t03-server:/export' });
+const bytes = Buffer.from('hard nfs fixture worker baseline');
+assert.equal(await pool.readiness(), true);
+await pool.submit('create', { id, size: bytes.length, metadata: { filename: 'probe.bin' }, collectionId, grantId });
+assert.equal((await pool.submit('write', { id, offset: 0, collectionId, grantId }, Readable.from([bytes]))).offset, bytes.length);
+assert.equal((await pool.submit('stat', { id })).offset, bytes.length);
+const result = await pool.submit('finalize', { id, collectionId, size: bytes.length, originalName: 'probe.bin' });
+const completed = `/data/${result.locator}`;
+const actual = createHash('sha256');
+for await (const chunk of createReadStream(completed)) actual.update(chunk);
+const expected = createHash('sha256').update(bytes).digest('hex');
+assert.equal(actual.digest('hex'), expected);
+await fs.unlink(completed);
+await fs.unlink(`/data/partials/${id}.json`);
+await fs.rmdir(`/data/completed/${collectionId}`);
+await fs.rmdir('/data/completed');
+console.log('HARD_NFS_WORKER_BASELINE_PASS', expected, pool.counts);
