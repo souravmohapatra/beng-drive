@@ -57,7 +57,7 @@ try {
   if (remote(`stat -c '%a' ${quote(socket)}`) !== '600') throw new Error('Admin socket mode mismatch');
   console.log(`IMAGE ${image}\nRUNTIME ${runtime}\nUID_GID ${uid.replace('\n', ':')}\nPORTS ${portsShown.replaceAll('\n', '; ')}\nRESTART ${restart}\nSCOPED_BINDS_OK\nADMIN_SOCKET_MODE 600`);
   const probe = remote(`curl -fsS -o /dev/null -w '%{http_code}' http://127.0.0.1:4310/health/live; curl -sS -o /dev/null -w ' %{http_code}' -H 'Tailscale-User-Login: fixture-owner@example.invalid' http://127.0.0.1:4310/api/admin/session; curl --unix-socket ${quote(socket)} -sS -o /dev/null -w ' %{http_code}' -H 'Tailscale-User-Login: fixture-owner@example.invalid' http://localhost/api/admin/session; curl --unix-socket ${quote(socket)} -sS -o /dev/null -w ' %{http_code}' -H 'Tailscale-User-Login: fixture-owner@example.invalid' http://localhost/health/ready`);
-  if (probe !== '200 404 200 503') throw new Error(`Unexpected loopback results ${probe}`);
+  if (probe !== '200 403 200 503') throw new Error(`Unexpected loopback results ${probe}`);
   const health = JSON.parse(remote(`curl --unix-socket ${quote(socket)} -fsS -H 'Tailscale-User-Login: fixture-owner@example.invalid' http://localhost/api/admin/health`));
   if (!['available','unavailable'].includes(health.storage) || health.cleanup.pending !== 0 || health.cleanup.overdue !== 0 || health.cleanup.lastSuccessAt !== null) throw new Error('Private cleanup health shape mismatch');
   console.log('PRIVATE_CLEANUP_HEALTH_PASS', JSON.stringify(health));
@@ -68,7 +68,7 @@ try {
   const dbPath = '/var/lib/beng-drive/app.sqlite';
   dbEval(`const {DatabaseSync}=require('node:sqlite');const d=new DatabaseSync('${dbPath}');d.exec('CREATE TABLE fixture_sentinel (value TEXT NOT NULL)');d.prepare('INSERT INTO fixture_sentinel VALUES (?)').run('${marker}');d.close()`);
   const readMarker = () => dbEval(`const {DatabaseSync}=require('node:sqlite');const d=new DatabaseSync('${dbPath}');console.log(d.prepare('SELECT value FROM fixture_sentinel').get().value);d.close()`);
-  if (dbEval(`const {DatabaseSync}=require('node:sqlite');const d=new DatabaseSync('${dbPath}');console.log(d.prepare('PRAGMA user_version').get().user_version);d.close()`) !== '5') throw new Error('Schema v5 missing from package');
+  if (dbEval(`const {DatabaseSync}=require('node:sqlite');const d=new DatabaseSync('${dbPath}');console.log(d.prepare('PRAGMA user_version').get().user_version);d.close()`) !== '6') throw new Error('Schema v6 missing from package');
   const hostDb = `${dir}/state/app.sqlite`;
   const inode = remote(`test -s ${quote(hostDb)} && stat -c '%i' ${quote(hostDb)}`);
   const before = readMarker();
@@ -97,7 +97,7 @@ try {
   const afterAbrupt = readMarker();
   const socketAfterAbrupt = remote(`stat -c '%F %a %u' ${quote(socket)}`);
   const abruptProbe = remote(`curl -fsS -o /dev/null -w '%{http_code}' http://127.0.0.1:4310/health/live; curl -sS -o /dev/null -w ' %{http_code}' -H 'Tailscale-User-Login: fixture-owner@example.invalid' http://127.0.0.1:4310/api/admin/session; curl --unix-socket ${quote(socket)} -sS -o /dev/null -w ' %{http_code}' -H 'Tailscale-User-Login: fixture-owner@example.invalid' http://localhost/api/admin/session`);
-  if (oldPid === newPid || !/^\d+$/.test(newPid) || afterAbrupt !== marker || socketAfterAbrupt !== 'socket 600 1000' || abruptProbe !== '200 404 200' || remote(`stat -c '%i' ${quote(hostDb)}`) !== inode) throw new Error('Abrupt restart failed persistent state or routing');
+  if (oldPid === newPid || !/^\d+$/.test(newPid) || afterAbrupt !== marker || socketAfterAbrupt !== 'socket 600 1000' || abruptProbe !== '200 403 200' || remote(`stat -c '%i' ${quote(hostDb)}`) !== inode) throw new Error('Abrupt restart failed persistent state or routing');
   console.log(`ABRUPT_EXIT_VERIFIED ${recreatedContainer} ${oldPid}->${newPid} exit=${killed} stale=${stale}`);
   console.log(`ABRUPT_RESTART_PASS sentinel=${afterAbrupt} socket=${socketAfterAbrupt} routes=${abruptProbe}`);
 

@@ -51,7 +51,7 @@ function query(url) {
   if (cursor && (cursor.length>512 || !/^[A-Za-z0-9_-]+$/.test(cursor))) fail(400,'INVALID_CURSOR');
   return {cursor,limit};
 }
-export async function adminApi(req,config,db,url,uploads) {
+export async function adminApi(req,config,db,url,uploads,intake) {
   if (!db) fail(503,'DATABASE_UNAVAILABLE');
   const path=url.pathname;
   if (path==='/api/admin/session') {
@@ -59,6 +59,15 @@ export async function adminApi(req,config,db,url,uploads) {
     const result = session(db,req);
     result.payload.publicOrigin = config.publicOrigin;
     return result;
+  }
+  if (path==='/api/admin/intake') {
+    if (url.search) fail(400,'INVALID_INPUT');
+    if (req.method==='GET') return {status:200,payload:intake.status()};
+    if (req.method==='PUT') {
+      mutation(db,req,config.adminOrigin);
+      return {status:200,payload:intake.update(await jsonBody(req))};
+    }
+    fail(405,'METHOD_NOT_ALLOWED','GET, PUT');
   }
   if (path==='/api/admin/health') {
     if (req.method!=='GET') fail(405,'METHOD_NOT_ALLOWED','GET');

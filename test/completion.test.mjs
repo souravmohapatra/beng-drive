@@ -38,6 +38,7 @@ async function setup() {
   const root=join(dir,'nas');mkdirSync(root,{mode:0o700});
   const config=configFrom({APP_MODE:'fixture',ADMIN_OWNER_LOGIN:owner,ADMIN_SOCKET_PATH:join(dir,'admin.sock'),DB_PATH:join(dir,'app.sqlite'),PUBLIC_ORIGIN:origin,ADMIN_ORIGIN:adminOrigin,FREE_SPACE_FLOOR_BYTES:'1'});
   let db=openDatabase(config.dbPath),storage=new StoragePool({root,fixture:true,expectedSource:''});
+  db.exec("UPDATE intake_window SET closes_at='9999-12-31T23:59:59.999Z' WHERE id=1");
   let servers=await startServers(config,[0,0],storage,db);
   const guest=()=>`http://127.0.0.1:${servers[0].address().port}`;
   const identity={'Tailscale-User-Login':owner};

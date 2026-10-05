@@ -8,7 +8,7 @@ export function openDatabase(path) {
   try {
     db.exec('PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000');
     const version = db.prepare('PRAGMA user_version').get().user_version;
-    if (version > 5) throw new Error('Unsupported database schema');
+    if (version > 6) throw new Error('Unsupported database schema');
     if (version < 1) {
       db.exec('BEGIN IMMEDIATE');
       try {
@@ -125,6 +125,18 @@ export function openDatabase(path) {
           INSERT INTO cleanup_state (id) VALUES (1);
           INSERT INTO schema_migrations VALUES (5, CURRENT_TIMESTAMP);
           PRAGMA user_version=5;
+        `);
+        db.exec('COMMIT');
+      } catch (error) { db.exec('ROLLBACK'); throw error; }
+    }
+    if (version < 6) {
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        db.exec(`
+          CREATE TABLE intake_window (id INTEGER PRIMARY KEY CHECK(id=1), closes_at TEXT);
+          INSERT INTO intake_window (id,closes_at) VALUES (1,NULL);
+          INSERT INTO schema_migrations VALUES (6, CURRENT_TIMESTAMP);
+          PRAGMA user_version=6;
         `);
         db.exec('COMMIT');
       } catch (error) { db.exec('ROLLBACK'); throw error; }

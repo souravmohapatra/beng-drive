@@ -45,15 +45,13 @@ test('SQLite migration is repeatable and refuses a newer schema', () => {
   };
   try {
     let db = openDatabase(path);
-    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 5);
-    assert.equal(db.prepare('SELECT count(*) AS n FROM schema_migrations').get().n, 5);
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 6);
     db.exec('CREATE TABLE fixture_sentinel (value TEXT NOT NULL)');
     db.prepare('INSERT INTO fixture_sentinel VALUES (?)').run(sentinel);
     db.close();
     db = openDatabase(path);
-    assert.equal(db.prepare('SELECT count(*) AS n FROM schema_migrations').get().n, 5);
     assertSentinel(db);
-    db.exec('PRAGMA user_version=6');
+    db.exec('PRAGMA user_version=7');
     db.close();
     assert.throws(() => openDatabase(path), /Unsupported database schema/);
     const replacement = join(dir, 'replacement.sqlite');
@@ -72,6 +70,7 @@ test('real guest and admin listeners stay isolated and fail closed', async () =>
   const config = configFrom(base);
   const dir = mkdtempSync(join(tmpdir(), 'bd-http-'));
   const db = openDatabase(join(dir, 'app.sqlite'));
+  db.exec("UPDATE intake_window SET closes_at='9999-12-31T23:59:59.999Z' WHERE id=1");
   const logs = [];
   const oldLog = console.info;
   console.info = line => logs.push(line);

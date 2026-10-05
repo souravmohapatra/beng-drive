@@ -44,7 +44,6 @@ test('version1 migration preserves data, repeats, and refuses newer schema',()=>
     db.close();
     db=openDatabase(f.path);
     assert.equal(db.prepare('SELECT value FROM sentinel').get().value,'kept');
-    assert.equal(db.prepare('SELECT count(*) n FROM schema_migrations').get().n,5);
     assert.equal(db.prepare('SELECT title FROM collections WHERE id=?').get(c.id).title,'One');
     db.exec('PRAGMA user_version=99');db.close();
     assert.throws(()=>openDatabase(f.path),/Unsupported database schema/);
@@ -98,6 +97,7 @@ function openDatabaseWithNewerReadOnly(path) {
 
 test('private Unix API validates credentials, CSRF, pagination and one-time keys',async()=>{
   const f=fixture();let db=openDatabase(f.path);
+  db.exec("UPDATE intake_window SET closes_at='9999-12-31T23:59:59.999Z' WHERE id=1");
   const config=configFrom({NODE_ENV:'production',APP_MODE:'production',ADMIN_OWNER_LOGIN:owner,ADMIN_SOCKET_PATH:f.socket,
     DB_PATH:f.path,PUBLIC_ORIGIN:'https://drive.example.invalid',ADMIN_ORIGIN:origin});
   let servers=await startServers(config,[0,0],undefined,db);

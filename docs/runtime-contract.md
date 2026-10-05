@@ -59,9 +59,15 @@ One `__Host-beng_session` Secure/HttpOnly/SameSite=Lax/Path=/ cookie holds an op
 
 Errors use `{error:{code,message,retryAfterSeconds?},requestId}` with random requestId, no exception text or storage paths. Codes: 400 INVALID_INPUT; 401 UNAUTHORIZED/INVALID_KEY; 403 FORBIDDEN/ORIGIN_REJECTED; 404 NOT_FOUND (also foreign IDs); 405 METHOD_NOT_ALLOWED with Allow; 409 QUOTA_EXCEEDED/FILE_COUNT_LIMIT/OFFSET_CONFLICT/INVALID_STATE; 410 COLLECTION_UNAVAILABLE; 413 BODY_TOO_LARGE/FILE_TOO_LARGE; 415 UNSUPPORTED_MEDIA_TYPE; 429 RATE_LIMITED; 503 STORAGE_UNAVAILABLE/BUSY; 500 INTERNAL_ERROR. Tus protocol headers/status apply: HEAD no body, unsupported Tus-Resumable gets 412 with Tus-Version, safe PATCH offset conflicts get 409 with current Upload-Offset. All API/tus/session responses use Cache-Control: no-store.
 
+Closed intake is an earlier, allocation-light rejection path: non-page guest requests return 403 `{error:{code:"INTAKE_CLOSED",message:"Uploads are closed."}}` without a request ID, session lookup, body consumption or NAS work. HEAD has no response body. See the gate below; ordinary API/tus status rules apply only while open.
+
 ## Route contract
 
 `C` = current unexpired/unrevoked collection grant; `U` = C plus same-session upload ownership; `A` = authenticated owner identity through trusted Serve path. Authenticated mutations also enforce Origin/CSRF above. Unknown routes return 404; unlisted methods return 405. SPA fallback must exclude `/api`, `/uploads`, `/admin` and health paths. Pagination is max 100/page with opaque cursor. No download endpoint.
+
+**Global intake gate:** schema 6 stores one nullable UTC `closes_at`. Fresh and upgraded databases start closed. The single app process loads the setting at startup and updates it after a successful owner mutation; every guest request checks the server clock against it. Direct database edits are not a supported live control. At or after the deadline, GET/HEAD `/` and `/c/:token` serve the same static no-script quiet page (no invitation lookup); everything else is rejected before dispatch except `/health/live`. Assets, OPTIONS, session/receipt APIs and every tus method are blocked. Closed responses are no-store with a restrictive CSP; rejected requests close the connection without consuming their body. The table below describes the open window.
+
+The dashboard accepts local date/time, sends canonical UTC and offers open/update/close-now controls. GET/PUT intake and other owner operations remain private and available while closed. No Cloudflare Worker or paid feature is used; this gate reduces origin application work, not traffic reaching the origin. Reopening does not bypass collection checks or restore credentials that have expired or been revoked. Closure does not delete data or suspend normal partial cleanup. An admitted chunk may finish; the next request is denied.
 
 | Listener | Method and route | Auth | Success / result |
 | --- | --- | --- | --- |
@@ -78,6 +84,8 @@ Errors use `{error:{code,message,retryAfterSeconds?},requestId}` with random req
 | Guest | DELETE `/uploads/:token/:id` | U | 204 after deletion/accounting, repeat cancelled 204; unavailable 503 retains reservation; completed 409 |
 | Admin | GET `/`, `/assets/*` | A | 200 admin UI only |
 | Admin | GET `/api/admin/session` | A | 200 csrfToken and configured publicOrigin for invitation links |
+| Admin | GET `/api/admin/intake` | A | 200 `{open, closesAt, serverNow}` |
+| Admin | PUT `/api/admin/intake` | A + Origin/CSRF | 200 status; exact `{closesAt: future UTC ISO string \| null}` opens/updates or closes now |
 | Admin | GET `/api/admin/collections` | A | 200 summaries, paginated |
 | Admin | POST `/api/admin/collections` | A | 201 summary, invitation URL, one-time key |
 | Admin | GET `/api/admin/collections/:id` | A | 200 summary and paginated labels/status; no hash |
@@ -92,6 +100,8 @@ No guest admin registration, tus GET, completed-file DELETE or collection hard d
 ## Database, storage and recovery lifecycle
 
 SQLite: `foreign_keys=ON`, `journal_mode=WAL`, `synchronous=FULL`, `busy_timeout=5000`; one migration owner, numbered schema, fail on newer unsupported schema, no destructive downgrade. Persist grants and rate limits. Back up with SQLite backup API rather than copying a live main DB without WAL. Reconcile DB backup and NAS snapshot before reopening admission; roll back only to schema-compatible code.
+
+Schema 6 adds `intake_window` without altering existing collections, grants or uploads. Both new and upgraded databases require an explicit owner opening; an unexpired deadline survives restart and an elapsed one stays closed. Older applications reject schema 6: roll back only to compatible code or a consistent pre-upgrade database plus reconciled NAS snapshot.
 
 Tables: collections (unique random token, key hash/version, expiry, revoked, allowance), browser_sessions (token hash and CSRF hash/secret), grants (unique session+collection, version, expiry, display name), uploads (unique server ID, collection/grant, original metadata, declared size, status/timestamps, unique storage locator), bounded auth attempts, and schema version. Enforce foreign keys, integer/nonnegative/status constraints. In `BEGIN IMMEDIATE` admission compute completed+reserved bytes/count from indexed uploads; do not duplicate accounting counters. Every admitted noncancelled file, including zero-byte, counts. Failed-but-not-deleted and finalizing records retain full reservations. Tus committed offset is authoritative; no competing DB offset.
 

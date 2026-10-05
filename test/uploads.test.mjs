@@ -45,7 +45,9 @@ async function setup() {
   const env={APP_MODE:'fixture',ADMIN_OWNER_LOGIN:owner,ADMIN_SOCKET_PATH:join(dir,'admin.sock'),DB_PATH:join(dir,'app.sqlite'),
     PUBLIC_ORIGIN:publicOrigin,ADMIN_ORIGIN:adminOrigin,FREE_SPACE_FLOOR_BYTES:'1'};
   const config=configFrom(env),storage=new StoragePool({root,fixture:true,expectedSource:''});
-  let db=openDatabase(config.dbPath),servers=await startServers(config,[0,0],storage,db);
+  let db=openDatabase(config.dbPath);
+  db.exec("UPDATE intake_window SET closes_at='9999-12-31T23:59:59.999Z' WHERE id=1");
+  let servers=await startServers(config,[0,0],storage,db);
   const guest=()=>`http://127.0.0.1:${servers[0].address().port}`;
   const identity={'Tailscale-User-Login':owner};
   const adminSession=await send(config.adminSocketPath,'/api/admin/session',{headers:identity});

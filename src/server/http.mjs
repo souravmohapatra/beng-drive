@@ -7,6 +7,8 @@ import { normalizeIP } from './config.mjs';
 import { adminApi } from './admin-api.mjs';
 import { guestApi } from './guest-auth.mjs';
 import { uploadApi } from './uploads.mjs';
+import { createIntakeWindow } from './intake.mjs';
+import { closedResponse } from './closed-page.mjs';
 
 const assets = resolve('dist/client');
 const mime = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' };
@@ -73,8 +75,12 @@ async function asset(res, pathname, requestId) {
     res.end(body);
   } catch { error(res, 404, 'NOT_FOUND', requestId); }
 }
-function handler(kind, config, storage, db, options, uploads) {
+function handler(kind, config, storage, db, options, uploads, intake) {
   return async (req, res) => {
+    if (kind === 'guest' && !intake.isOpen()) {
+      const pathname = new URL(req.url || '/', 'http://localhost').pathname;
+      if (pathname !== '/health/live') return closedResponse(req, res, pathname);
+    }
     const requestId = randomUUID();
     const url = new URL(req.url || '/', 'http://localhost');
     const path = url.pathname;
@@ -94,7 +100,7 @@ function handler(kind, config, storage, db, options, uploads) {
     }
     if (admin && path.startsWith('/api/admin/')) {
       try {
-        const result = await adminApi(req, config, db, url, uploads);
+        const result = await adminApi(req, config, db, url, uploads, intake);
         return reply(res, result.status, result.payload, requestId, undefined, result.headers);
       } catch (failure) {
         if (failure.status) return error(res, failure.status, failure.code, requestId, failure.allow);
@@ -137,9 +143,10 @@ function handler(kind, config, storage, db, options, uploads) {
 }
 export async function startServers(config, ports = [config.guestPort, config.adminPort], storage, db, options) {
   const uploads = storage && db ? uploadApi(config, storage, db, options) : null;
+  const intake = createIntakeWindow(db, options?.clock);
   if (config.fixture && options?.onCleanupReady && uploads) options.onCleanupReady(uploads.cleanup);
   const servers = ['guest', 'admin'].map(kind => {
-    const route = handler(kind, config, storage, db, options, uploads);
+    const route = handler(kind, config, storage, db, options, uploads, intake);
     return createServer({ maxHeaderSize: 16384 }, (req, res) => {
       route(req, res).catch(() => res.headersSent ? res.destroy() : error(res, 500, 'INTERNAL_ERROR', randomUUID()));
     });

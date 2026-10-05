@@ -1,10 +1,10 @@
-# beng-drive foundation
+# beng-drive
 
-This is the application foundation and scoped T03 storage adapter. It serves a minimal invitation-required guest shell and a protected admin placeholder. Collections, authentication and production uploads are not implemented yet. The [runtime contract](docs/runtime-contract.md) defines the planned behavior and later gates. No `.agent` document is needed to build or run this source.
+Private, resumable file intake with a guest upload portal and an owner-only dashboard. Collection/session APIs, NAS-backed transfers, recovery and cleanup are implemented; production routing and release acceptance remain gated. The [runtime contract](docs/runtime-contract.md) defines the behavior and boundaries. No `.agent` document is needed to build or run this source.
 
 ## Local setup
 
-Use Node **24.21.0**. Install with `npm ci`, then run `npm run check`, `npm run build`, and `npm test`. `npm start` serves the built assets; build first. The only durable state today is the numbered SQLite migration at `DB_PATH`. For local testing, use a disposable DB path and the explicit fixture mode; do not use a production owner identity:
+Use Node **24.21.0**. Install with `npm ci`, then run `npm run check`, `npm run build`, and `npm test`. `npm start` serves the built assets; build first. SQLite persists collections, sessions, upload accounting and the intake deadline at `DB_PATH`; payloads belong on the NAS. For local testing, use a disposable DB path and explicit fixture mode; do not use a production owner identity:
 
 ```sh
 APP_MODE=fixture NODE_ENV=test \
@@ -13,13 +13,23 @@ ADMIN_OWNER_LOGIN=fixture-owner@example.invalid TRUSTED_ADMIN_PROXY_IP=127.0.0.1
 DB_PATH=/tmp/beng-drive-local-fixture.sqlite npm start
 ```
 
-Fixture mode permits an empty owner login for fail-closed checks. Production mode requires a nonempty exact owner login and exact trusted peer IP. Never treat an identity header alone as proof of origin. The server listens on loopback locally; Compose publishes both container ports only on host loopback. Admin access additionally needs private Tailscale Serve and owner-only effective policy in T04. No public skeleton deployment is authorized.
+Fixture mode permits an empty owner login for fail-closed checks and a trusted loopback TCP proxy for isolated tests. Production requires a nonempty exact owner login and a private admin Unix socket; TCP proxy trust is not a production option. Secure-cookie browser flows require HTTPS. Compose publishes only the guest port on host loopback. Admin access additionally needs private Tailscale Serve and owner-only effective policy; no public test deployment is implied.
+
+## Opening an upload window
+
+Public intake is **closed by default**, including after upgrading an existing database to schema 6. Visitors to `/` or an invitation see a static “A little quiet, for now” page with no JavaScript. Guest APIs, tus operations and frontend assets are blocked before authentication, body processing or storage work. Only the minimal `/health/live` response remains available.
+
+In the private owner dashboard, set **Accept uploads until (your local time)** and select **Open uploads**. While open, use **Update closing time** or **Close uploads now**. The server persists the UTC deadline and checks it on every guest request; expiry does not depend on leaving the dashboard open or running a scheduler. Collection keys, expiry, revocation and quotas still apply.
+
+Closing blocks subsequent requests, not a chunk already accepted. It does not delete files or revoke keys/sessions; reopening restores access while those credentials remain valid. Normal partial-file cleanup continues. An already-open guest screen switches to the quiet page when its next request receives `INTAKE_CLOSED`.
+
+This is an application-level gate compatible with the intended free Cloudflare Tunnel setup; no Workers or paid Cloudflare features are required. Closed requests still reach the origin—it is not an edge firewall or a substitute for DDoS protection. See the [private intake API](docs/collections-api.md#intake-window) for automation.
 
 ## Container contract
 
-`compose.yaml` mounts local SQLite state at `/var/lib/beng-drive` and only the scoped NAS directory at `/data`. Both bind sources must already exist (`create_host_path: false`). The app does not use `/data` in T02. Supply the settings from `.env.example` privately and set `STATE_BIND_SOURCE`, `NAS_BIND_SOURCE`, and `TRUSTED_ADMIN_PROXY_IP` for the target host. The existing Cloudflare connector credentials stay outside this app. The repository `.gitignore` excludes secret configuration, dependencies, builds and SQLite state; `.agent` and `.agents` use this checkout's Git local exclusion and must remain outside commits. Never package `.env`, `.agent`, `.agents`, `.git`, local dependencies or state.
+`compose.yaml` mounts local SQLite state at `/var/lib/beng-drive` and only the scoped NAS directory at `/data`. Both bind sources must already exist (`create_host_path: false`). Supply settings from `.env.example` privately and set `STATE_BIND_SOURCE` and `NAS_BIND_SOURCE` for the target host. Serve targets the private admin socket in the state directory. Existing Cloudflare connector credentials stay outside this app. The repository `.gitignore` excludes secret configuration, dependencies, builds and SQLite state; `.agent` and `.agents` use this checkout's Git local exclusion and must remain outside commits. Never package `.env`, `.agent`, `.agents`, `.git`, local dependencies or state.
 
-The image is pinned to Node 24.21.0 by digest. `npm run smoke:container` uses a unique disposable fixture under `/home/beng` on the verified mini PC when local Docker is unavailable (its Snap Docker cannot bind `/tmp`). It transfers only source/build inputs, checks the image and loopback routes, then removes its named fixture. The fixture's discovered gateway is temporary; discover and configure the actual trusted Serve peer at deployment. It does not deploy the app or access the real NAS. T03 storage proof is pending review, and T04 must prove real tunnel/Serve identity, policy and network isolation before production use.
+The image is pinned to Node 24.21.0 by digest. `npm run smoke:container` uses a unique disposable fixture under `/home/beng` on the verified mini PC when local Docker is unavailable (its Snap Docker cannot bind `/tmp`). It transfers only source/build inputs, checks the image, default-closed guest routes, private socket and persistence, then removes its named fixture. It does not deploy the app or access the real NAS. Real tunnel/Serve identity, policy and network isolation still require acceptance before production use.
 
 ## Storage spike checks
 

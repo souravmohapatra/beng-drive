@@ -9,6 +9,7 @@ type Activity = { id: string; originalName: string; declaredSize: number; displa
 type Detail = Collection & { uploads: Activity[]; nextCursor: string | null };
 type Health = { storage: string; cleanup: { lastAttemptAt: string | null; lastSuccessAt: string | null; pending: number; overdue: number; errors: number; errorCode: string | null } };
 type OwnerSession = { csrfToken: string; publicOrigin: string };
+type Intake = { open: boolean; closesAt: string | null; serverNow: string };
 
 function localTime(value: string): string {
   const date = new Date(value);
@@ -50,11 +51,48 @@ function CollectionForm({ current, save, cancel, busy }: {
   </form>;
 }
 
+function IntakePanel({ intake, busy, save, refresh }: {
+  intake: Intake; busy: boolean; save: (closesAt: string | null) => Promise<void>; refresh: () => void;
+}) {
+  const [until, setUntil] = useState('');
+  const [elapsed, setElapsed] = useState(0);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    setUntil(localTime(intake.open && intake.closesAt ? intake.closesAt : new Date(Date.parse(intake.serverNow) + 4 * 3600000).toISOString()));
+    setElapsed(0);
+    const started = performance.now();
+    const timer = setInterval(() => setElapsed(performance.now() - started), 1000);
+    return () => clearInterval(timer);
+  }, [intake]);
+  const now = Date.parse(intake.serverNow) + elapsed;
+  const open = intake.open && !!intake.closesAt && Date.parse(intake.closesAt) > now;
+  return <section className="summary-card intake-panel" aria-labelledby="intake-title">
+    <h2 id="intake-title" role="status">{open ? 'Accepting uploads' : 'Uploads are closed'}</h2>
+    <p>{open ? `Closes automatically at ${new Date(intake.closesAt!).toLocaleString()}. Collection keys and expiry still apply.` :
+      'Visitors see the quiet page. Invitations and guest APIs stay closed until you open a window.'}</p>
+    <form onSubmit={event => {
+      event.preventDefault(); setError('');
+      const date = new Date(until);
+      if (!Number.isFinite(date.getTime()) || date.getTime() <= now) { setError('Choose a closing time in the future.'); return; }
+      void save(date.toISOString());
+    }}>
+      <div className="field"><label htmlFor="intake-until">Accept uploads until (your local time)</label>
+        <input id="intake-until" type="datetime-local" value={until} required disabled={busy} onChange={event => setUntil(event.target.value)} /></div>
+      <Alert message={error} />
+      <div className="button-row"><button className="primary" disabled={busy}>{open ? 'Update closing time' : 'Open uploads'}</button>
+        {open && <button type="button" className="secondary" disabled={busy} onClick={() => { setError(''); void save(null); }}>Close uploads now</button>}
+        <button type="button" className="text-button" disabled={busy} onClick={refresh}>Refresh window status</button></div>
+    </form>
+    <p className="product-note">Closing blocks new requests; a chunk already accepted may finish. It does not delete files or revoke keys. Normal partial-file cleanup still applies.</p>
+  </section>;
+}
+
 export function Owner() {
   const [collections, setCollections] = useState<Collection[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
+  const [intake, setIntake] = useState<Intake | null>(null);
   const [origin, setOrigin] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -68,6 +106,7 @@ export function Owner() {
   async function load(after?: string) {
     setError('');
     try {
+      setIntake(await api<Intake>('/api/admin/intake'));
       const page = await api<{ items: Collection[]; nextCursor: string | null }>(`${base}${after ? `?cursor=${encodeURIComponent(after)}` : ''}`);
       setCollections(previous => after ? [...previous, ...page.items] : page.items); setCursor(page.nextCursor);
       setHealth(await api<Health>('/api/admin/health'));
@@ -94,12 +133,22 @@ export function Owner() {
     finally { setBusy(false); }
   }
 
-  async function mutate<T>(path: string, method: string, data?: Record<string, string | number>): Promise<T> {
+  async function mutate<T>(path: string, method: string, data?: Record<string, string | number | null>): Promise<T> {
     // Refresh immediately before a mutation: the owner's CSRF token rotates across tabs.
     const session = await api<OwnerSession>('/api/admin/session');
     setOrigin(session.publicOrigin);
     return api<T>(path, { method, headers: { 'X-CSRF-Token': session.csrfToken, 'Content-Type': 'application/json' },
       body: data ? JSON.stringify(data) : undefined });
+  }
+
+  async function saveIntake(closesAt: string | null) {
+    setBusy(true); setError('');
+    try {
+      const next = await mutate<Intake>('/api/admin/intake', 'PUT', { closesAt });
+      setIntake(next);
+      setNotice(next.open ? 'Upload window opened. It will close automatically at the selected time.' : 'Uploads closed. Visitors now see the quiet page.');
+    } catch (failure) { setError(problem(failure)); }
+    finally { setBusy(false); }
   }
 
   async function save(data: Record<string, string | number>) {
@@ -139,6 +188,7 @@ export function Owner() {
     <div className="section-head"><div><h1 className="screen-title">{detail ? detail.title : 'Collections'}</h1>
       <p>Private invitations. Files saved directly to your storage.</p></div>
       <button className="secondary" disabled={busy} onClick={() => { setIssued(null); setDetail(null); setForm(form === 'create' ? null : 'create'); }}>New collection</button></div>
+    {intake && <IntakePanel intake={intake} busy={busy} save={saveIntake} refresh={() => void load()} />}
     {issued && <section className="surface issued-key" aria-labelledby="issued-title"><h2 id="issued-title">Your new key — shown once</h2>
       <p>Save this key now. Share it separately from the link. It cannot be recovered later; rotation invalidates existing guest access.</p>
       <div className="field"><label htmlFor="issued-link">Invitation for {issued.title}</label><textarea id="issued-link" readOnly value={issued.invitation} /></div>

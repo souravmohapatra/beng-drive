@@ -38,6 +38,7 @@ function send(target,path,{method='GET',headers={},body,chunks}={}) {
 }
 async function setup({clock=()=>now}={}) {
   const f=fixture();let db=openDatabase(f.path);const config=configFrom(f.env);
+  db.exec("UPDATE intake_window SET closes_at='9999-12-31T23:59:59.999Z' WHERE id=1");
   let servers=await startServers(config,[0,0],undefined,db,{clock});
   const guest=()=>`http://127.0.0.1:${servers[0].address().port}`;
   const identity={'Tailscale-User-Login':owner};
@@ -257,15 +258,15 @@ test('v2 migration retains collection, admin and referenced receipt rows',async(
     db.prepare('INSERT INTO uploads(id,collection_id,grant_id,original_name,storage_locator,declared_size,status,created_at,updated_at,completed_at) VALUES (?,?,?,?,?,0,\'completed\',?,?,?)')
       .run('upload','c','grant','saved.txt','path/saved',stamp,stamp,stamp);
     db.prepare('INSERT INTO admin_sessions VALUES (?,?,?,?)').run('adminhash','admincsrf',stamp,stamp);
-    db.exec('DROP TABLE cleanup_state; DROP INDEX uploads_cleanup_idx; ALTER TABLE uploads DROP COLUMN transfer_at; ALTER TABLE uploads DROP COLUMN deletion_intent; ALTER TABLE uploads DROP COLUMN deleting_at; DROP TABLE guest_csrf; DROP TABLE unlock_attempts; DROP TABLE unlock_buckets; DROP INDEX uploads_recovery_idx; ALTER TABLE uploads DROP COLUMN content_hash; ALTER TABLE uploads DROP COLUMN upload_metadata; DELETE FROM schema_migrations WHERE version IN (3,4,5); PRAGMA user_version=2');
+    db.exec('DROP TABLE intake_window; DROP TABLE cleanup_state; DROP INDEX uploads_cleanup_idx; ALTER TABLE uploads DROP COLUMN transfer_at; ALTER TABLE uploads DROP COLUMN deletion_intent; ALTER TABLE uploads DROP COLUMN deleting_at; DROP TABLE guest_csrf; DROP TABLE unlock_attempts; DROP TABLE unlock_buckets; DROP INDEX uploads_recovery_idx; ALTER TABLE uploads DROP COLUMN content_hash; ALTER TABLE uploads DROP COLUMN upload_metadata; DELETE FROM schema_migrations WHERE version IN (3,4,5,6); PRAGMA user_version=2');
     db.close();db=openDatabase(f.path);
-    assert.equal(db.prepare('PRAGMA user_version').get().user_version,5);
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version,6);
     assert.equal(db.prepare('SELECT count(*) n FROM collections').get().n,1);
     assert.equal(db.prepare('SELECT count(*) n FROM uploads WHERE grant_id=?').get('grant').n,1);
     assert.equal(db.prepare('SELECT count(*) n FROM admin_sessions').get().n,1);
     assert.equal(db.prepare('PRAGMA foreign_key_check').all().length,0);
     db.close();db=openDatabase(f.path);assert.equal(db.prepare('SELECT count(*) n FROM schema_migrations WHERE version=3').get().n,1);
-    db.exec('PRAGMA user_version=6');db.close();
+    db.exec('PRAGMA user_version=7');db.close();
     assert.throws(()=>openDatabase(f.path),/Unsupported database schema/);
     db=null;
   } finally {db?.close();f.close();}

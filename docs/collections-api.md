@@ -16,6 +16,8 @@ The session response includes the configured `publicOrigin`, so the private dash
 
 | Method and path | Result |
 | --- | --- |
+| GET `/api/admin/intake` | `{open, closesAt, serverNow}` from the server clock |
+| PUT `/api/admin/intake` | Persist exact `{closesAt}`: future canonical UTC ISO string opens/updates; null closes immediately |
 | GET `/api/admin/collections?limit=1..100&cursor=...` | Ordered summaries and next cursor; default 100 |
 | POST `/api/admin/collections` | 201 summary, configured invitation URL, one-time key |
 | GET `/api/admin/collections/:id?limit=1..100&cursor=...` | Summary and paginated contributor/upload status metadata |
@@ -27,6 +29,16 @@ Titles are trimmed, required and at most 120 UTF-8 bytes; welcome is optional/nu
 
 When create omits allowance or expiry, it uses validated runtime `DEFAULT_ALLOWANCE_BYTES` and `COLLECTION_DEFAULT_TTL_SECONDS`; the baseline settings are 10,000,000,000 bytes and seven days. Explicit valid values, including zero allowance, take precedence. Default expiry is calculated from the collection's persisted creation timestamp. Startup rejects a configured TTL that could exceed JavaScript's representable date range.
 
+## Intake window
+
+Migration 6 adds a singleton `intake_window` row, defaulting to closed on fresh installations and upgrades. Existing collections, grants, reservations and completed receipts are retained. Only the private owner API changes the live setting; no public status or settings API exists while closed.
+
+`GET /api/admin/intake` returns a boolean `open`, nullable UTC `closesAt` and UTC `serverNow`. `PUT` accepts exactly one property, `closesAt`: a future canonical `Date.toISOString()` timestamp or null. Missing/extra fields, wrong types, noncanonical dates and past/current deadlines return 400. It uses the same owner identity, secure admin session, Origin and CSRF checks as collection mutations. A successful response returns the persisted status.
+
+The dashboard's **Accept uploads until (your local time)** control converts local time to UTC. **Open uploads**, **Update closing time** and **Close uploads now** manage the window; **Refresh window status** picks up another owner's tab. The displayed open/closed state advances from the server time, but the server always decides admission. Restart preserves the deadline; expiry needs no scheduler.
+
+Closed public pages are static and contain no scripts or invitation information. All guest APIs/tus/assets are denied before auth, body parsing and storage; only minimal liveness remains. Already-admitted chunks may settle, but subsequent requests are rejected. Closing does not delete files or revoke credentials, and partial cleanup continues. This app-level gate requires no Workers or paid Cloudflare plan and does not stop requests at the edge.
+
 ## Owner dashboard
 
 The admin listener serves the working collection list, create/edit forms, contributor/upload activity, one-time key display and rotation/revocation confirmations. Copy invitation links and keys separately. Keys stay in component memory only and disappear when hidden, navigating away or leaving the page; old keys cannot be recovered.
@@ -37,4 +49,4 @@ Local HTTPS browser verification uses an isolated fixture proxy with a synthetic
 
 ## Backup and rollback
 
-No production database was migrated. For a future live migration, use Node SQLite's consistent backup API to a local restricted file before starting new code; do not copy a live main `.sqlite` file alone while WAL is active. A version 2 database must not be reopened by the version 1 application: version 1 rejects newer schema. Roll back application code only to a version 2 compatible build, or restore the consistent pre-migration backup together with a reconciled NAS snapshot before reopening admission. Do not delete completed NAS payloads to make database state fit a rollback.
+No production database was migrated. Before a future live migration, use Node SQLite's consistent backup API to a local restricted file; do not copy a live main `.sqlite` file alone while WAL is active. Current schema is 6; older builds reject it. Roll back only to schema-6-compatible code, or restore a consistent pre-migration backup together with a reconciled NAS snapshot before reopening admission. Do not delete completed NAS payloads to make database state fit a rollback.

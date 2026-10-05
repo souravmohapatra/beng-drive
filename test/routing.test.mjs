@@ -35,6 +35,7 @@ test('production admin is socket-only and guest cannot select its router', async
   assert.throws(() => configFrom({ ...env, ADMIN_SOCKET_PATH: '/tmp/other.sock' }), /ADMIN_SOCKET_PATH/);
   const config = configFrom(env);
   const db = openDatabase(join(dir, 'app.sqlite'));
+  db.exec("UPDATE intake_window SET closes_at='9999-12-31T23:59:59.999Z' WHERE id=1");
   const servers = await startServers(config, [0, 0], undefined, db);
   try {
     const guest = `http://127.0.0.1:${servers[0].address().port}`;

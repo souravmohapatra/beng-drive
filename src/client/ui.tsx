@@ -26,6 +26,7 @@ export function problem(error: unknown): string {
     FILE_TOO_LARGE: 'This file exceeds the allowed file size. Choose a smaller file.',
     INSUFFICIENT_STORAGE: 'There is not enough storage space to save this file. Ask your host for help.',
     INVALID_INPUT: 'Check the entered values and try again. Text limits count UTF-8 bytes.',
+    INVALID_INTAKE_WINDOW: 'Choose a valid closing time in the future.',
     INVALID_METADATA: 'The filename or file information is not supported. Rename the file and try again.',
     UPLOAD_FINALIZING: 'This file is already being saved or is completed. It cannot be cancelled.',
     FORBIDDEN: 'This action is no longer authorized. Refresh your access and try again.',

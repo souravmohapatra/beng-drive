@@ -46,6 +46,7 @@ async function setup({ intervalSeconds = 3600 } = {}) {
     FREE_SPACE_FLOOR_BYTES: '1', PARTIAL_IDLE_SECONDS: '172800', CLEANUP_INTERVAL_SECONDS: String(intervalSeconds) });
   const storage = new StoragePool({ root, fixture: true, expectedSource: '' });
   let db = openDatabase(config.dbPath);
+  db.exec("UPDATE intake_window SET closes_at='9999-12-31T23:59:59.999Z' WHERE id=1");
   let servers = await startServers(config, [0, 0], storage, db, { cleanupClock: () => ms, onCleanupReady: run => { cleanup = run; } });
   const guest = () => `http://127.0.0.1:${servers[0].address().port}`;
   const identity = { 'Tailscale-User-Login': owner };
@@ -644,7 +645,7 @@ test('zero-byte completed payload keeps its count and bytes through cleanup', as
   } finally { await x.close(); }
 });
 
-test('v4 to v5 migration keeps completed receipt identity and rejects future schema', async () => {
+test('v4 migration keeps completed receipt identity and rejects future schema', async () => {
   const x = await setup();
   try {
     const c = await x.create(20), auth = await x.unlock(c), path = await x.post(c, auth, 0), id = path.split('/').at(-1);
@@ -656,18 +657,18 @@ test('v4 to v5 migration keeps completed receipt identity and rejects future sch
     assert.ok(original.completed_at);
     await x.stop();
     let db = new DatabaseSync(x.config.dbPath);
-    db.exec(`DROP TABLE cleanup_state; DROP INDEX uploads_cleanup_idx;
+    db.exec(`DROP TABLE intake_window; DROP TABLE cleanup_state; DROP INDEX uploads_cleanup_idx;
       ALTER TABLE uploads DROP COLUMN transfer_at; ALTER TABLE uploads DROP COLUMN deletion_intent;
-      ALTER TABLE uploads DROP COLUMN deleting_at; DELETE FROM schema_migrations WHERE version=5; PRAGMA user_version=4`);
+      ALTER TABLE uploads DROP COLUMN deleting_at; DELETE FROM schema_migrations WHERE version IN (5,6); PRAGMA user_version=4`);
     db.close();
     db = openDatabase(x.config.dbPath);
-    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 5);
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 6);
     const migrated = db.prepare('SELECT completed_at,content_hash,storage_locator FROM uploads WHERE id=?').get(id);
     assert.equal(migrated.completed_at, original.completed_at);
     assert.equal(migrated.content_hash, original.content_hash);
     assert.equal(migrated.storage_locator, original.storage_locator);
     assert.equal(commitment(db, c.id).completedCount, 1);
-    db.exec('PRAGMA user_version=6'); db.close();
+    db.exec('PRAGMA user_version=7'); db.close();
     assert.throws(() => openDatabase(x.config.dbPath), /Unsupported database schema/);
   } finally { await x.close(); }
 });

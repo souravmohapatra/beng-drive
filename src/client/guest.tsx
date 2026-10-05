@@ -47,6 +47,16 @@ export function Guest({ token }: { token: string }) {
   const render = () => { if (alive.current) setView(entries.current.map(item => ({ ...item }))); };
   const change = (entry: Entry, update: Partial<Entry>) => { Object.assign(entry, update); render(); };
   const stop = () => { for (const entry of entries.current) void entry.upload?.abort().catch(() => {}); active.current.clear(); };
+  const showQuietPage = (failure: unknown) => {
+    let code = failure instanceof ApiError ? failure.code : '';
+    if (failure instanceof DetailedError && failure.originalResponse) {
+      try { code = JSON.parse(failure.originalResponse.getBody()).error?.code; } catch { /* HEAD has no response body. */ }
+    }
+    if (code !== 'INTAKE_CLOSED') return false;
+    authorized.current = false; alive.current = false; stop();
+    window.location.reload();
+    return true;
+  };
   const identify = (entry: Entry, id: string) => {
     // Receipt polling may discover a row before its creation response arrives.
     // Merge by server ID only, never by filename.
@@ -76,6 +86,7 @@ export function Guest({ token }: { token: string }) {
           identify(entry, id);
           if (['cancelled', 'cancelling'].includes(entry.state)) await cancel(entry);
         } catch (failure) {
+          if (showQuietPage(failure)) return;
           change(entry, { state: 'interrupted', error: `${problem(failure)} Refresh receipts before retrying an unconfirmed creation.` });
         }
       }
@@ -120,6 +131,7 @@ export function Guest({ token }: { token: string }) {
       setError(''); render();
     } catch (failure) {
       if (!alive.current) return;
+      if (showQuietPage(failure)) return;
       pollFailures.current++;
       if (failure instanceof ApiError && [401, 404, 410].includes(failure.status)) {
         authorized.current = false;
@@ -149,6 +161,7 @@ export function Guest({ token }: { token: string }) {
         body: JSON.stringify({ key: key.trim(), displayName: name.trim() }) });
       setKey(''); setSession(current); authorized.current = true; pollFailures.current = 0; await refresh();
     } catch (failure) {
+      if (showQuietPage(failure)) return;
       setError(problem(failure));
       if (failure instanceof ApiError && failure.status === 429) setCooldown(failure.retryAfter || 60);
     } finally { setUnlocking(false); }
@@ -206,6 +219,8 @@ export function Guest({ token }: { token: string }) {
         },
         onError: failure => {
           active.current.delete(entry.local);
+          if (showQuietPage(failure)) return;
+          if (failure instanceof DetailedError && failure.originalResponse?.getStatus() === 403) void refresh();
           if (entry.state !== 'uploading') { render(); return; }
           change(entry, { state: 'interrupted', error: transferError(failure), rate: 0 });
           announce(`${entry.name} interrupted. Retry or reselect the file.`);
@@ -232,7 +247,10 @@ export function Guest({ token }: { token: string }) {
       });
       change(entry, { state: 'cancelled', file: undefined, upload: undefined });
       announce(`${entry.name} cancelled.`); void refresh();
-    } catch (failure) { change(entry, { state: 'cancelling', error: transferError(failure as Error) }); }
+    } catch (failure) {
+      if (showQuietPage(failure)) return;
+      change(entry, { state: 'cancelling', error: transferError(failure as Error) });
+    }
     finally { active.current.delete(entry.local); change(entry, { cancelPending: false }); }
   }
 
